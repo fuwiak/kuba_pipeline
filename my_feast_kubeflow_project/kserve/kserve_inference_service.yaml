@@ -1,0 +1,12 @@
+# kserve/kserve_inference_service.yaml
+apiVersion: "serving.kserve.io/v1beta1"
+kind: "InferenceService"
+metadata:
+  name: "sp500-lstm-inference"
+  namespace: "default"
+spec:
+  predictor:
+    serviceAccountName: sa-minio
+    tensorflow:
+      storageUri: "s3://your-bucket/path/to/model"
+

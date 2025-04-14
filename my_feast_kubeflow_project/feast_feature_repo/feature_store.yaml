@@ -1,0 +1,9 @@
+project: sp500_stock_project
+registry: data/registry.db
+provider: local
+offline_store:
+  type: file
+  path: data/offline_store       # This can be the path where your local parquet files live
+online_store:
+  type: sqlite
+  path: data/online_store.db

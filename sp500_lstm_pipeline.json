@@ -1,0 +1,190 @@
+{
+  "components": {
+    "comp-evaluate-and-deploy-component": {
+      "executorLabel": "exec-evaluate-and-deploy-component",
+      "inputDefinitions": {
+        "artifacts": {
+          "model_input": {
+            "artifactType": {
+              "schemaTitle": "system.Model",
+              "schemaVersion": "0.0.1"
+            }
+          },
+          "rmse_input": {
+            "artifactType": {
+              "schemaTitle": "system.Dataset",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        },
+        "parameters": {
+          "threshold": {
+            "defaultValue": 20.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_DOUBLE"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "parameters": {
+          "Output": {
+            "parameterType": "STRING"
+          }
+        }
+      }
+    },
+    "comp-ingest-data-component": {
+      "executorLabel": "exec-ingest-data-component"
+    },
+    "comp-train-model-component": {
+      "executorLabel": "exec-train-model-component",
+      "outputDefinitions": {
+        "artifacts": {
+          "model_output": {
+            "artifactType": {
+              "schemaTitle": "system.Model",
+              "schemaVersion": "0.0.1"
+            }
+          },
+          "rmse_output": {
+            "artifactType": {
+              "schemaTitle": "system.Dataset",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        }
+      }
+    }
+  },
+  "deploymentSpec": {
+    "executors": {
+      "exec-evaluate-and-deploy-component": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "evaluate_and_deploy_component"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet     --no-warn-script-location 'kubernetes' 'pyyaml' 'kfp==2.0.0-beta.16' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\npython3 -m kfp.components.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef evaluate_and_deploy_component(\n    model_input: Input[Model],\n    rmse_input: Input[Dataset],\n    # Optional: pass a param for threshold\n    threshold: float = 20.0\n) -> str:\n    \"\"\"\n    1) Read RMSE.\n    2) If RMSE < threshold, deploy with KServe using model_input.path.\n    3) Return a message string.\n    \"\"\"\n    import os\n    import subprocess\n\n    with open(rmse_input.path, \"r\") as f:\n        rmse = float(f.read().strip())\n\n    if rmse < threshold:\n        # For demonstration, we can do a KServe deployment with a pre-defined YAML.\n        # The YAML references a model location in e.g. MinIO, or a volume, etc.\n        # You can also dynamically build the KServe YAML. \n        subprocess.run([\"kubectl\", \"apply\", \"-f\", \"/app/kserve/kserve_inference_service.yaml\"], check=True)\n        return f\"Model deployed via KServe! RMSE={rmse}\"\n    else:\n        return f\"RMSE={rmse} >= {threshold}, skipping deployment.\"\n\n"
+          ],
+          "image": "python:3.9"
+        }
+      },
+      "exec-ingest-data-component": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "ingest_data_component"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet     --no-warn-script-location 'feast==0.30.0' 'pandas' 'pyarrow' 'kfp==2.0.0-beta.16' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\npython3 -m kfp.components.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef ingest_data_component():\n    \"\"\"\n    1) Convert CSV to Parquet\n    2) feast apply\n    3) feast materialize\n    \"\"\"\n    import os\n    import subprocess\n    import pandas as pd\n\n    # Example: read CSV, convert to parquet\n    df = pd.read_csv(\"/app/sp500_raw.csv\")\n    os.makedirs(\"/app/data/offline_store\", exist_ok=True)\n    df.to_parquet(\"/app/data/offline_store/sp500.parquet\")\n\n    # Now do 'feast apply' & 'feast materialize'\n    # In a real scenario, you'd have to have your feature_store.yaml in /app/feast_feature_repo \n    # or copy your entire repo. For brevity, let's assume your feast repo is inside /app/feast_feature_repo\n    os.chdir(\"/app/feast_feature_repo\")\n    subprocess.run([\"feast\", \"apply\"], check=True)\n\n    # Materialize full range (example)\n    # For a real pipeline, you'd pass start/end times as parameters\n    subprocess.run([\"feast\", \"materialize\", \"--start=2020-01-01\", \"--end=2023-01-01\"], check=True)\n\n"
+          ],
+          "image": "python:3.9"
+        }
+      },
+      "exec-train-model-component": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "train_model_component"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet     --no-warn-script-location 'feast==0.30.0' 'tensorflow==2.11.0' 'pandas' 'pyarrow' 'scikit-learn' 'kfp==2.0.0-beta.16' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\npython3 -m kfp.components.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef train_model_component(\n    # We output the model as a named artifact:\n    model_output: Output[Model],\n    rmse_output: Output[Dataset]\n):\n    \"\"\"\n    1) Read historical features from Feast offline store\n    2) Train a small LSTM\n    3) Calculate metrics (RMSE), store in rmse_output\n    4) Save model to model_output.path\n    \"\"\"\n    import feast\n    import pandas as pd\n    import numpy as np\n    import tensorflow as tf\n    from sklearn.metrics import mean_squared_error\n\n    fs = feast.FeatureStore(repo_path=\"/app/feast_feature_repo\")\n\n    # Suppose we want to train on ticker = \"GOOG\" only for a simple demonstration:\n    entity_df = pd.DataFrame({\"ticker\": [\"GOOG\"], \"event_timestamp\": pd.date_range(\"2022-01-01\", periods=200)})\n\n    # Use offline store retrieval\n    training_df = fs.get_historical_features(\n        entity_df=entity_df,\n        features=[\"sp500_view:close\", \"sp500_view:volume\"]\n    ).to_df()\n\n    # Basic data prep\n    training_df = training_df.dropna()\n    training_df = training_df.sort_values(\"event_timestamp\")\n    close_prices = training_df[\"close\"].values\n\n    # For demonstration, let's do a naive LSTM dataset creation\n    # E.g. predict the next close price from the previous 5\n    window_size = 5\n    X, y = [], []\n    for i in range(len(close_prices) - window_size):\n        X.append(close_prices[i : i+window_size])\n        y.append(close_prices[i+window_size])\n    X = np.array(X).reshape(-1, window_size, 1)\n    y = np.array(y).reshape(-1, 1)\n\n    # Train-test split\n    split_idx = int(0.8 * len(X))\n    X_train, y_train = X[:split_idx], y[:split_idx]\n    X_val, y_val = X[split_idx:], y[split_idx:]\n\n    model = tf.keras.Sequential([\n        tf.keras.layers.LSTM(16, input_shape=(window_size, 1), return_sequences=False),\n        tf.keras.layers.Dense(1)\n    ])\n    model.compile(optimizer=\"adam\", loss=\"mse\")\n    history = model.fit(X_train, y_train, validation_data=(X_val, y_val), epochs=2)\n\n    # Evaluate\n    y_pred = model.predict(X_val)\n    rmse = mean_squared_error(y_val, y_pred, squared=False)\n\n    # Save the RMSE to the rmse_output artifact\n    with open(rmse_output.path, \"w\") as f:\n        f.write(str(rmse))\n\n    # Save the model\n    model.save(model_output.path)\n\n"
+          ],
+          "image": "python:3.9"
+        }
+      }
+    }
+  },
+  "pipelineInfo": {
+    "description": "Pipeline for SP500 LSTM model training and deployment",
+    "name": "sp500-lstm-pipeline"
+  },
+  "root": {
+    "dag": {
+      "tasks": {
+        "evaluate-and-deploy-component": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-evaluate-and-deploy-component"
+          },
+          "dependentTasks": [
+            "train-model-component"
+          ],
+          "inputs": {
+            "artifacts": {
+              "model_input": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "model_output",
+                  "producerTask": "train-model-component"
+                }
+              },
+              "rmse_input": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "rmse_output",
+                  "producerTask": "train-model-component"
+                }
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "evaluate-and-deploy-component"
+          }
+        },
+        "ingest-data-component": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-ingest-data-component"
+          },
+          "taskInfo": {
+            "name": "ingest-data-component"
+          }
+        },
+        "train-model-component": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-train-model-component"
+          },
+          "dependentTasks": [
+            "ingest-data-component"
+          ],
+          "taskInfo": {
+            "name": "train-model-component"
+          }
+        }
+      }
+    }
+  },
+  "schemaVersion": "2.1.0",
+  "sdkVersion": "kfp-2.0.0-beta.16"
+}
